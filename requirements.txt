@@ -5,3 +5,4 @@ gunicorn==22.0.0
 whitenoise
 Pillow      
 django-silk 
+django-ninja

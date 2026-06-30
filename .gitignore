@@ -1,28 +1,28 @@
-
 __pycache__/
 *.py[cod]
 *.pyo
-*.pyd
-*.so
-*.egg
-*.egg-info/
-dist/
-build/
-.eggs/
 
 venv/
 .venv/
 env/
-ENV/
 
 *.log
-local_settings.py
 db.sqlite3
 staticfiles/
-mediafiles/
 
 .env
 !.env.example
+
+# JWT RSA keys — JANGAN commit private key (lihat Chapter 7)
+jwt-signing.pem
+jwt-signing.pub
+
+# File hasil generate Celery tasks (sertifikat & report CSV)
+# Folder-nya tetap dipertahankan lewat .gitkeep, isinya tidak perlu di-commit
+media/certificates/*
+media/reports/*
+!media/certificates/.gitkeep
+!media/reports/.gitkeep
 
 .DS_Store
 Thumbs.db

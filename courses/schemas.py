@@ -3,6 +3,11 @@ from datetime import datetime
 from typing import Optional, List
 
 
+# ── User & Auth Schemas ───────────────────────────────────────
+# Catatan: schema login & refresh token TIDAK didefinisikan di sini.
+# Endpoint /auth/sign-in dan /auth/token-refresh sudah disediakan
+# langsung oleh library django-ninja-simple-jwt (mobile_auth_router).
+
 class UserOut(Schema):
     id: int
     username: str
@@ -14,21 +19,11 @@ class UserOut(Schema):
 
 class RegisterIn(Schema):
     username: str
-    email: str
     password: str
+    email: str
     first_name: str = ''
     last_name: str = ''
     role: str = 'student'
-
-
-class LoginIn(Schema):
-    username: str
-    password: str
-
-
-class LoginOut(Schema):
-    message: str
-    user: UserOut
 
 
 class UpdateProfileIn(Schema):
@@ -37,11 +32,15 @@ class UpdateProfileIn(Schema):
     email: str = ''
 
 
+# ── Category Schemas ──────────────────────────────────────────
+
 class CategoryOut(Schema):
     id: int
     name: str
     parent_id: Optional[int] = None
 
+
+# ── Course Schemas ────────────────────────────────────────────
 
 class CourseIn(Schema):
     name: str
@@ -84,6 +83,8 @@ class PaginatedCourseOut(Schema):
     results: List[CourseOut]
 
 
+# ── Enrollment Schemas ────────────────────────────────────────
+
 class EnrollmentIn(Schema):
     course_id: int
 
@@ -100,6 +101,8 @@ class MyCourseOut(Schema):
     roles: str
 
 
+# ── Progress Schemas ──────────────────────────────────────────
+
 class ProgressIn(Schema):
     content_id: int
     is_completed: bool = True
@@ -109,3 +112,61 @@ class ProgressOut(Schema):
     id: int
     is_completed: bool
     completed_at: Optional[datetime] = None
+
+
+# ── Comment Schemas ───────────────────────────────────────────
+# Mengikuti contoh otorisasi di Chapter 7 Section 7.3-7.5.
+# Catatan: model Comment kita memakai member_id (FK ke CourseMember),
+# bukan user_id langsung seperti contoh modul, jadi pengecekan ownership
+# di api.py menelusuri comment.member_id.user_id.
+
+class CommentIn(Schema):
+    comment: str
+    content_id: int
+
+
+class CommentUpdateIn(Schema):
+    comment: str
+
+
+class CommentOut(Schema):
+    id: int
+    comment: str
+    content_id: int
+    member_id: int
+
+
+# ── Analytics Schemas (MongoDB) ───────────────────────────────
+
+class PopularCourseOut(Schema):
+    course_id: int
+    total_views: int
+    unique_user_count: int
+
+
+class DailySummaryOut(Schema):
+    date: str
+    total_actions: int
+    unique_user_count: int
+
+
+class UserActivityOut(Schema):
+    user_id: int
+    actions_breakdown: dict
+    total_actions: int
+    recent_activities: List[dict]
+
+
+# ── Celery Task / Report Schemas ──────────────────────────────
+
+class TaskTriggeredOut(Schema):
+    task_id: str
+    status: str
+    message: str
+
+
+class TaskStatusOut(Schema):
+    task_id: str
+    status: str
+    result: Optional[dict] = None
+    message: Optional[str] = None

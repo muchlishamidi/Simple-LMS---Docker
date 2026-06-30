@@ -1,0 +1,434 @@
+{
+  "info": {
+    "name": "Simple LMS API",
+    "description": "Collection untuk testing REST API Simple LMS dengan JWT Authentication (django-ninja-simple-jwt) dan RBAC.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8000/api" },
+    { "key": "access_token", "value": "" },
+    { "key": "refresh_token", "value": "" },
+    { "key": "course_id", "value": "1" },
+    { "key": "enrollment_id", "value": "1" },
+    { "key": "content_id", "value": "1" },
+    { "key": "comment_id", "value": "1" },
+    { "key": "task_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"dosen03\",\n  \"email\": \"dosen03@lms.com\",\n  \"password\": \"password123\",\n  \"first_name\": \"Rina\",\n  \"last_name\": \"Wijaya\",\n  \"role\": \"instructor\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/auth/register", "host": ["{{base_url}}"], "path": ["auth", "register"] }
+          }
+        },
+        {
+          "name": "Sign In (Login)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.access) {",
+                  "    pm.collectionVariables.set('access_token', data.access);",
+                  "    pm.collectionVariables.set('refresh_token', data.refresh);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"dosen01\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/auth/sign-in", "host": ["{{base_url}}"], "path": ["auth", "sign-in"] }
+          }
+        },
+        {
+          "name": "Token Refresh",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.access) {",
+                  "    pm.collectionVariables.set('access_token', data.access);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{refresh_token}}\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/auth/token-refresh", "host": ["{{base_url}}"], "path": ["auth", "token-refresh"] }
+          }
+        },
+        {
+          "name": "Get Me",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/auth/me", "host": ["{{base_url}}"], "path": ["auth", "me"] }
+          }
+        },
+        {
+          "name": "Update Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"first_name\": \"Budi Updated\",\n  \"last_name\": \"Santoso\",\n  \"email\": \"budi.updated@lms.com\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/auth/me", "host": ["{{base_url}}"], "path": ["auth", "me"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Courses - Public",
+      "item": [
+        {
+          "name": "List Courses",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/courses?page=1&page_size=10",
+              "host": ["{{base_url}}"],
+              "path": ["courses"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "page_size", "value": "10" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Courses - Filter by search & price",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/courses?search=web&min_price=30000&max_price=100000",
+              "host": ["{{base_url}}"],
+              "path": ["courses"],
+              "query": [
+                { "key": "search", "value": "web" },
+                { "key": "min_price", "value": "30000" },
+                { "key": "max_price", "value": "100000" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Detail Course",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/courses/{{course_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["courses", "{{course_id}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Courses - Protected",
+      "item": [
+        {
+          "name": "Create Course (Authenticated -> becomes Teacher)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.id) {",
+                  "    pm.collectionVariables.set('course_id', data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Machine Learning\",\n  \"description\": \"Belajar ML dengan Python\",\n  \"price\": 75000\n}"
+            },
+            "url": { "raw": "{{base_url}}/courses", "host": ["{{base_url}}"], "path": ["courses"] }
+          }
+        },
+        {
+          "name": "Update Course (Owner only)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"price\": 80000\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/courses/{{course_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["courses", "{{course_id}}"]
+            }
+          }
+        },
+        {
+          "name": "Delete Course (Owner or Superadmin)",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/courses/{{course_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["courses", "{{course_id}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Enrollments",
+      "item": [
+        {
+          "name": "Enroll to Course (any authenticated user)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.id) {",
+                  "    pm.collectionVariables.set('enrollment_id', data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"course_id\": {{course_id}}\n}"
+            },
+            "url": { "raw": "{{base_url}}/enrollments", "host": ["{{base_url}}"], "path": ["enrollments"] }
+          }
+        },
+        {
+          "name": "My Courses",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/enrollments/my-courses",
+              "host": ["{{base_url}}"],
+              "path": ["enrollments", "my-courses"]
+            }
+          }
+        },
+        {
+          "name": "Mark Lesson Progress",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content_id\": {{content_id}},\n  \"is_completed\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/enrollments/{{enrollment_id}}/progress",
+              "host": ["{{base_url}}"],
+              "path": ["enrollments", "{{enrollment_id}}", "progress"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Comments",
+      "item": [
+        {
+          "name": "Post Comment (requires enrollment)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.id) {",
+                  "    pm.collectionVariables.set('comment_id', data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content_id\": {{content_id}},\n  \"comment\": \"Materi ini sangat membantu, terima kasih!\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/comments", "host": ["{{base_url}}"], "path": ["comments"] }
+          }
+        },
+        {
+          "name": "Update Comment (owner only)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"comment\": \"Update: materi ini luar biasa membantu!\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/comments/{{comment_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["comments", "{{comment_id}}"]
+            }
+          }
+        },
+        {
+          "name": "Delete Comment (owner, course owner, or superadmin)",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/comments/{{comment_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["comments", "{{comment_id}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Analytics (MongoDB, Admin only)",
+      "item": [
+        {
+          "name": "Popular Courses",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/analytics/popular-courses?limit=5",
+              "host": ["{{base_url}}"],
+              "path": ["analytics", "popular-courses"],
+              "query": [{ "key": "limit", "value": "5" }]
+            }
+          }
+        },
+        {
+          "name": "Daily Activity Summary",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/analytics/daily-summary?days=7",
+              "host": ["{{base_url}}"],
+              "path": ["analytics", "daily-summary"],
+              "query": [{ "key": "days", "value": "7" }]
+            }
+          }
+        },
+        {
+          "name": "User Activity Summary",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/analytics/user-activity/1",
+              "host": ["{{base_url}}"],
+              "path": ["analytics", "user-activity", "1"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports (Celery async)",
+      "item": [
+        {
+          "name": "Generate Course Report",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.task_id) {",
+                  "    pm.collectionVariables.set('task_id', data.task_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/reports/generate/{{course_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["reports", "generate", "{{course_id}}"]
+            }
+          }
+        },
+        {
+          "name": "Check Report Status",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/reports/status/{{task_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["reports", "status", "{{task_id}}"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

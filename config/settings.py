@@ -14,14 +14,15 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "silk",      
-    "courses",  
+    "silk",
+    "ninja_simple_jwt",
+    "courses",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
-    "silk.middleware.SilkyMiddleware", 
+    "silk.middleware.SilkyMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -79,4 +80,70 @@ STATIC_URL = config("STATIC_URL", default="/static/")
 STATIC_ROOT = config("STATIC_ROOT", default=BASE_DIR / "staticfiles")
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+# ══════════════════════════════════════════════════════════════
+# REDIS — Cache & Rate Limiting
+# ══════════════════════════════════════════════════════════════
+
+REDIS_HOST = config("REDIS_HOST", default="redis")
+REDIS_PORT = config("REDIS_PORT", default=6379, cast=int)
+REDIS_CACHE_DB = config("REDIS_CACHE_DB", default=0, cast=int)
+REDIS_RATELIMIT_DB = config("REDIS_RATELIMIT_DB", default=1, cast=int)
+
+# Catatan: caching course list/detail TIDAK memakai Django CACHES framework,
+# melainkan raw redis-py client langsung (lihat courses/cache.py). Ini
+# supaya key di Redis mudah diperiksa manual lewat redis-cli tanpa
+# prefix/versioning tambahan dari Django, dan supaya pattern-based
+# invalidation (SCAN course:list:*) konsisten lintas versi backend.
+
+# TTL (detik) untuk masing-masing jenis cache — dipakai di courses/cache.py
+CACHE_TTL_COURSE_LIST = 60 * 5     # 5 menit
+CACHE_TTL_COURSE_DETAIL = 60 * 10  # 10 menit
+
+# Rate limiting: 60 request / 60 detik per user atau IP
+RATE_LIMIT_MAX_REQUESTS = 60
+RATE_LIMIT_WINDOW_SECONDS = 60
+
+
+# ══════════════════════════════════════════════════════════════
+# MONGODB — Activity Logs & Learning Analytics
+# ══════════════════════════════════════════════════════════════
+
+MONGO_USER = config("MONGO_USER", default="admin")
+MONGO_PASSWORD = config("MONGO_PASSWORD", default="password123")
+MONGO_HOST = config("MONGO_HOST", default="mongodb")
+MONGO_PORT = config("MONGO_PORT", default=27017, cast=int)
+MONGO_DB_NAME = config("MONGO_DB", default="lms_analytics")
+MONGO_URI = f"mongodb://{MONGO_USER}:{MONGO_PASSWORD}@{MONGO_HOST}:{MONGO_PORT}/"
+
+
+# ══════════════════════════════════════════════════════════════
+# CELERY — Async Tasks via RabbitMQ, Result Backend via Redis
+# ══════════════════════════════════════════════════════════════
+
+CELERY_BROKER_URL = config(
+    "CELERY_BROKER_URL", default="amqp://admin:password123@rabbitmq:5672//"
+)
+CELERY_RESULT_BACKEND = config(
+    "CELERY_RESULT_BACKEND", default=f"redis://{REDIS_HOST}:{REDIS_PORT}/2"
+)
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+
+from celery.schedules import crontab  # noqa: E402
+
+CELERY_BEAT_SCHEDULE = {
+    "update-course-statistics": {
+        "task": "courses.tasks.update_course_statistics",
+        # Setiap 10 menit untuk kebutuhan demo. Untuk production ganti
+        # ke crontab(hour=0, minute=0) supaya berjalan sekali sehari.
+        "schedule": crontab(minute="*/10"),
+    },
+}

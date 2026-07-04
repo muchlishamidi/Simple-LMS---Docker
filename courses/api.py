@@ -11,6 +11,7 @@ from .models import User, Course, CourseMember, CourseContent, Comment, Progress
 from .schemas import (
     RegisterIn, UpdateProfileIn, UserOut,
     CourseIn, CoursePatchIn, CourseOut, DetailCourseOut, PaginatedCourseOut,
+    CourseOrdering,
     EnrollmentIn, EnrollmentOut, MyCourseOut,
     ProgressIn, ProgressOut,
     CommentIn, CommentUpdateIn, CommentOut,
@@ -33,6 +34,7 @@ from .mongo_service import (
 )
 from .serializers import serialize_course, serialize_course_detail
 from .tasks import send_enrollment_email, generate_certificate, export_course_report
+from .response import success, created, no_content, paginated, register_error_handlers
 
 api = NinjaAPI(
     title="Simple LMS API",
@@ -46,6 +48,9 @@ api.add_router("/auth/", mobile_auth_router)
 # Dipakai sebagai parameter auth= pada endpoint yang butuh login.
 apiAuth = HttpJwtAuth()
 
+# Daftarkan global error handler supaya error response konsisten
+register_error_handlers(api)
+
 
 def get_object_or_404(model, **kwargs):
     try:
@@ -58,7 +63,7 @@ def get_object_or_404(model, **kwargs):
 # AUTH ENDPOINTS — TAMBAHAN (di luar yang disediakan library)
 # ══════════════════════════════════════════════════════════════
 
-@api.post("auth/register", response={201: UserOut}, tags=["Auth"])
+@api.post("auth/register", tags=["Auth"])
 def register(request, data: RegisterIn):
     """Register pengguna baru, dengan field `role` (admin/instructor/student)."""
     if User.objects.filter(username=data.username).exists():
@@ -76,16 +81,30 @@ def register(request, data: RegisterIn):
         last_name=data.last_name,
         role=data.role,
     )
-    return 201, new_user
+    from django.http import JsonResponse
+    user_data = {
+        "id": new_user.id,
+        "username": new_user.username,
+        "email": new_user.email,
+        "first_name": new_user.first_name,
+        "last_name": new_user.last_name,
+        "role": new_user.role,
+    }
+    return JsonResponse(created(user_data, "Registrasi berhasil"), status=201)
 
 
-@api.get("auth/me", response=UserOut, auth=apiAuth, tags=["Auth"])
+@api.get("auth/me", auth=apiAuth, tags=["Auth"])
 def get_me(request):
     """Mengambil data user yang sedang login."""
-    return get_authenticated_user(request)
+    user = get_authenticated_user(request)
+    from django.http import JsonResponse
+    return JsonResponse(success({
+        "id": user.id, "username": user.username, "email": user.email,
+        "first_name": user.first_name, "last_name": user.last_name, "role": user.role,
+    }))
 
 
-@api.put("auth/me", response=UserOut, auth=apiAuth, tags=["Auth"])
+@api.put("auth/me", auth=apiAuth, tags=["Auth"])
 def update_profile(request, data: UpdateProfileIn):
     """Mengubah profil user yang sedang login."""
     user = get_authenticated_user(request)
@@ -96,7 +115,11 @@ def update_profile(request, data: UpdateProfileIn):
     if data.email:
         user.email = data.email
     user.save()
-    return user
+    from django.http import JsonResponse
+    return JsonResponse(success({
+        "id": user.id, "username": user.username, "email": user.email,
+        "first_name": user.first_name, "last_name": user.last_name, "role": user.role,
+    }, "Profil berhasil diperbarui"))
 
 
 # ══════════════════════════════════════════════════════════════
@@ -105,7 +128,7 @@ def update_profile(request, data: UpdateProfileIn):
 # di sini karena endpoint ini publik dan paling rawan diakses berlebihan.
 # ══════════════════════════════════════════════════════════════
 
-@api.get("courses", response=PaginatedCourseOut, tags=["Courses"])
+@api.get("courses", tags=["Courses"])
 @rate_limited(lambda request: get_client_ip(request))
 def list_courses(
     request,
@@ -113,13 +136,26 @@ def list_courses(
     min_price: Optional[int] = None,
     max_price: Optional[int] = None,
     category_id: Optional[int] = None,
+    ordering: CourseOrdering = CourseOrdering.created_desc,
     page: int = 1,
     page_size: int = 10,
 ):
-    """List semua course dengan pagination dan filter opsional. Endpoint publik, di-cache 5 menit."""
+    """
+    List semua course dengan pagination, filter, dan sorting.
+    Endpoint publik, response di-cache 5 menit di Redis.
+
+    Sorting options (ordering):
+    - name / -name
+    - price / -price
+    - created_at / -created_at (default)
+    """
+    if page_size > 50:
+        page_size = 50  # batasi maksimal 50 item per halaman
+
     query_params = {
         "search": search, "min_price": min_price, "max_price": max_price,
-        "category_id": category_id, "page": page, "page_size": page_size,
+        "category_id": category_id, "ordering": ordering.value,
+        "page": page, "page_size": page_size,
     }
 
     cached = get_cached_course_list(query_params)
@@ -137,21 +173,29 @@ def list_courses(
     if category_id is not None:
         qs = qs.filter(category_id=category_id)
 
+    # Sorting — nilai ordering dari enum sudah berformat Django ORM
+    # (prefix "-" untuk descending, tanpa prefix untuk ascending)
+    qs = qs.order_by(ordering.value)
+
     total = qs.count()
+    total_pages = -(-total // page_size)  # ceiling division
     offset = (page - 1) * page_size
     results = list(qs[offset:offset + page_size])
 
-    data = {
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        "results": [serialize_course(c) for c in results],
-    }
+    data = paginated(
+        results=[serialize_course(c) for c in results],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+    # Tambah total_pages ke dalam data["data"] karena paginated() sudah hitung
+    data["data"]["ordering"] = ordering.value
+
     set_cached_course_list(query_params, data)
     return data
 
 
-@api.get("courses/{id}", response=DetailCourseOut, tags=["Courses"])
+@api.get("courses/{id}", tags=["Courses"])
 @rate_limited(lambda request: get_client_ip(request))
 def detail_course(request, id: int):
     """Detail course beserta daftar kontennya. Endpoint publik, di-cache 10 menit."""
@@ -166,11 +210,9 @@ def detail_course(request, id: int):
     except Course.DoesNotExist:
         raise HttpError(404, "Course tidak ditemukan")
 
-    data = serialize_course_detail(course)
+    data = success(serialize_course_detail(course))
     set_cached_course_detail(id, data)
 
-    # Activity log ke MongoDB — dicatat di luar cache hit supaya tidak
-    # menumpuk log saat data yang sama berulang kali diambil dari cache.
     user_id = getattr(getattr(request, 'user', None), 'id', None)
     log_activity(
         user_id=user_id,
@@ -191,7 +233,7 @@ def detail_course(request, id: int):
 # Setiap perubahan data course memicu cache invalidation.
 # ══════════════════════════════════════════════════════════════
 
-@api.post("courses", response={201: CourseOut}, auth=apiAuth, tags=["Courses"])
+@api.post("courses", auth=apiAuth, tags=["Courses"])
 def create_course(request, data: CourseIn):
     """Buat course baru. Semua user yang login bisa membuat dan otomatis jadi teacher."""
     user = get_authenticated_user(request)
@@ -203,10 +245,15 @@ def create_course(request, data: CourseIn):
         teacher=user,
     )
     invalidate_course_cache()
-    return 201, Course.objects.select_related('teacher', 'category').get(pk=course.pk)
+    course_data = serialize_course(
+        Course.objects.select_related('teacher', 'category').get(pk=course.pk)
+    )
+    from django.http import JsonResponse
+    import json
+    return JsonResponse(created(course_data, "Course berhasil dibuat"), status=201)
 
 
-@api.patch("courses/{id}", response=CourseOut, auth=apiAuth, tags=["Courses"])
+@api.patch("courses/{id}", auth=apiAuth, tags=["Courses"])
 def update_course(request, id: int, data: CoursePatchIn):
     """Update sebagian data course. Hanya owner (teacher) yang boleh mengedit."""
     user = get_authenticated_user(request)
@@ -225,10 +272,14 @@ def update_course(request, id: int, data: CoursePatchIn):
 
     course.save()
     invalidate_course_cache(course_id=id)
-    return Course.objects.select_related('teacher', 'category').get(pk=course.pk)
+    course_data = serialize_course(
+        Course.objects.select_related('teacher', 'category').get(pk=course.pk)
+    )
+    from django.http import JsonResponse
+    return JsonResponse(success(course_data, "Course berhasil diperbarui"))
 
 
-@api.delete("courses/{id}", response={204: None}, auth=apiAuth, tags=["Courses"])
+@api.delete("courses/{id}", auth=apiAuth, tags=["Courses"])
 def delete_course(request, id: int):
     """Hapus course. Hanya course owner atau superadmin."""
     user = get_authenticated_user(request)
@@ -239,7 +290,8 @@ def delete_course(request, id: int):
     try:
         course.delete()
         invalidate_course_cache(course_id=id)
-        return 204, None
+        from django.http import JsonResponse
+        return JsonResponse(no_content("Course berhasil dihapus"))
     except Exception:
         raise HttpError(400, "Course tidak bisa dihapus karena masih memiliki relasi")
 
@@ -251,7 +303,7 @@ def delete_course(request, id: int):
 #                        (Celery) otomatis saat progress mencapai 100%
 # ══════════════════════════════════════════════════════════════
 
-@api.post("enrollments", response={201: EnrollmentOut}, auth=apiAuth, tags=["Enrollments"])
+@api.post("enrollments", auth=apiAuth, tags=["Enrollments"])
 def enroll_course(request, data: EnrollmentIn):
     """Daftar ke course. Semua user yang login boleh enroll."""
     user = get_authenticated_user(request)
@@ -277,27 +329,38 @@ def enroll_course(request, data: EnrollmentIn):
         metadata={"course_name": course.name},
     )
 
-    # Async — user tidak perlu menunggu email terkirim
     send_enrollment_email.delay(user.id, course.id)
 
-    return 201, {
+    from django.http import JsonResponse
+    return JsonResponse(created({
         "id": member.id,
         "course_id": member.course_id_id,
         "roles": member.roles,
-    }
+    }, "Berhasil mendaftar ke course"), status=201)
 
 
-@api.get("enrollments/my-courses", response=List[MyCourseOut], auth=apiAuth, tags=["Enrollments"])
+@api.get("enrollments/my-courses", auth=apiAuth, tags=["Enrollments"])
 def my_courses(request):
     """Mengambil semua course yang diikuti oleh user yang sedang login."""
     user = get_authenticated_user(request)
     enrollments = CourseMember.objects.filter(
         user_id=user
     ).select_related('course_id', 'course_id__teacher', 'course_id__category')
-    return list(enrollments)
+
+    from django.http import JsonResponse
+    from .serializers import serialize_course
+    data = [
+        {
+            "id": e.id,
+            "roles": e.roles,
+            "course": serialize_course(e.course_id),
+        }
+        for e in enrollments
+    ]
+    return JsonResponse(success(data))
 
 
-@api.post("enrollments/{id}/progress", response={201: ProgressOut}, auth=apiAuth, tags=["Enrollments"])
+@api.post("enrollments/{id}/progress", auth=apiAuth, tags=["Enrollments"])
 def mark_progress(request, id: int, data: ProgressIn):
     """Menandai konten sebagai selesai. id adalah id Enrollment (CourseMember)."""
     user = get_authenticated_user(request)
@@ -307,7 +370,7 @@ def mark_progress(request, id: int, data: ProgressIn):
 
     content = get_object_or_404(CourseContent, pk=data.content_id)
 
-    progress, created = Progress.objects.get_or_create(
+    progress, prog_created = Progress.objects.get_or_create(
         member=member,
         content=content,
         defaults={
@@ -316,12 +379,11 @@ def mark_progress(request, id: int, data: ProgressIn):
         }
     )
 
-    if not created:
+    if not prog_created:
         progress.is_completed = data.is_completed
         progress.completed_at = timezone.now() if data.is_completed else None
         progress.save()
 
-    # Hitung progress terbaru, simpan snapshot ke MongoDB (Learning Analytics)
     percentage, completed_ids = calculate_course_progress(member)
     record_learning_progress(
         user_id=member.user_id_id,
@@ -331,11 +393,17 @@ def mark_progress(request, id: int, data: ProgressIn):
         completed_content_ids=completed_ids,
     )
 
-    # Course selesai 100% -> generate sertifikat secara async
     if percentage >= 100:
         generate_certificate.delay(member.user_id_id, member.course_id_id)
 
-    return 201, progress
+    from django.http import JsonResponse
+    return JsonResponse(created({
+        "id": progress.id,
+        "is_completed": progress.is_completed,
+        "completed_at": progress.completed_at.isoformat() if progress.completed_at else None,
+        "progress_percentage": percentage,
+        "certificate_triggered": percentage >= 100,
+    }, "Progress berhasil disimpan"), status=201)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -343,7 +411,7 @@ def mark_progress(request, id: int, data: ProgressIn):
 # post_comment memicu activity log ke MongoDB.
 # ══════════════════════════════════════════════════════════════
 
-@api.post("comments", auth=apiAuth, response={201: CommentOut}, tags=["Comments"])
+@api.post("comments", auth=apiAuth, tags=["Comments"])
 def post_comment(request, data: CommentIn):
     """Tambah komentar. Hanya user yang terdaftar (enrolled) di course terkait."""
     user = get_authenticated_user(request)
@@ -366,10 +434,16 @@ def post_comment(request, data: CommentIn):
         metadata={"course_id": content.course_id_id},
     )
 
-    return 201, comment
+    from django.http import JsonResponse
+    return JsonResponse(created({
+        "id": comment.id,
+        "comment": comment.comment,
+        "content_id": comment.content_id_id,
+        "member_id": comment.member_id_id,
+    }, "Komentar berhasil ditambahkan"), status=201)
 
 
-@api.put("comments/{id}", response=CommentOut, auth=apiAuth, tags=["Comments"])
+@api.put("comments/{id}", auth=apiAuth, tags=["Comments"])
 def update_comment(request, id: int, data: CommentUpdateIn):
     """Update komentar. Hanya pemilik komentar yang boleh mengedit."""
     user = get_authenticated_user(request)
@@ -379,10 +453,17 @@ def update_comment(request, id: int, data: CommentUpdateIn):
 
     comment.comment = data.comment
     comment.save()
-    return comment
+
+    from django.http import JsonResponse
+    return JsonResponse(success({
+        "id": comment.id,
+        "comment": comment.comment,
+        "content_id": comment.content_id_id,
+        "member_id": comment.member_id_id,
+    }, "Komentar berhasil diperbarui"))
 
 
-@api.delete("comments/{id}", response={204: None}, auth=apiAuth, tags=["Comments"])
+@api.delete("comments/{id}", auth=apiAuth, tags=["Comments"])
 def delete_comment(request, id: int):
     """
     Hapus komentar. Bisa dilakukan oleh:
@@ -405,45 +486,49 @@ def delete_comment(request, id: int):
         raise HttpError(403, "Anda tidak memiliki izin untuk menghapus komentar ini")
 
     comment.delete()
-    return 204, None
+    from django.http import JsonResponse
+    return JsonResponse(no_content("Komentar berhasil dihapus"))
 
 
 # ══════════════════════════════════════════════════════════════
 # ANALYTICS ENDPOINTS (MongoDB aggregation) — Admin only
 # ══════════════════════════════════════════════════════════════
 
-@api.get("analytics/popular-courses", response=List[PopularCourseOut], auth=apiAuth, tags=["Analytics"])
+@api.get("analytics/popular-courses", auth=apiAuth, tags=["Analytics"])
 def popular_courses(request, limit: int = 5):
     """Top course berdasarkan jumlah view_course (aggregation MongoDB). Admin only."""
     user = get_authenticated_user(request)
     if not user.is_superuser and user.role != User.Role.ADMIN:
         raise HttpError(403, "Hanya admin yang bisa mengakses analytics")
-    return get_popular_courses(limit=limit)
+    from django.http import JsonResponse
+    return JsonResponse(success(get_popular_courses(limit=limit)))
 
 
-@api.get("analytics/user-activity/{user_id}", response=UserActivityOut, auth=apiAuth, tags=["Analytics"])
+@api.get("analytics/user-activity/{user_id}", auth=apiAuth, tags=["Analytics"])
 def user_activity(request, user_id: int):
     """Ringkasan aktivitas seorang user (aggregation MongoDB). Admin only."""
     requester = get_authenticated_user(request)
     if not requester.is_superuser and requester.role != User.Role.ADMIN:
         raise HttpError(403, "Hanya admin yang bisa mengakses analytics")
-    return get_user_activity_summary(user_id)
+    from django.http import JsonResponse
+    return JsonResponse(success(get_user_activity_summary(user_id)))
 
 
-@api.get("analytics/daily-summary", response=List[DailySummaryOut], auth=apiAuth, tags=["Analytics"])
+@api.get("analytics/daily-summary", auth=apiAuth, tags=["Analytics"])
 def daily_summary(request, days: int = 7):
     """Ringkasan aktivitas harian, N hari terakhir (aggregation MongoDB). Admin only."""
     user = get_authenticated_user(request)
     if not user.is_superuser and user.role != User.Role.ADMIN:
         raise HttpError(403, "Hanya admin yang bisa mengakses analytics")
-    return get_daily_activity_summary(days=days)
+    from django.http import JsonResponse
+    return JsonResponse(success(get_daily_activity_summary(days=days)))
 
 
 # ══════════════════════════════════════════════════════════════
 # REPORT ENDPOINTS (Celery async — export_course_report)
 # ══════════════════════════════════════════════════════════════
 
-@api.post("reports/generate/{course_id}", response=TaskTriggeredOut, auth=apiAuth, tags=["Reports"])
+@api.post("reports/generate/{course_id}", auth=apiAuth, tags=["Reports"])
 def generate_report(request, course_id: int):
     """Trigger pembuatan laporan CSV course secara async. Hanya course owner/admin."""
     user = get_authenticated_user(request)
@@ -451,22 +536,27 @@ def generate_report(request, course_id: int):
     check_owner_or_superadmin(course.teacher, user)
 
     task = export_course_report.delay(course_id)
-    return {
+    from django.http import JsonResponse
+    return JsonResponse(created({
         "task_id": task.id,
         "status": "processing",
-        "message": f"Report untuk course '{course.name}' sedang dibuat.",
-    }
+    }, f"Report untuk course '{course.name}' sedang dibuat"), status=201)
 
 
-@api.get("reports/status/{task_id}", response=TaskStatusOut, auth=apiAuth, tags=["Reports"])
+@api.get("reports/status/{task_id}", auth=apiAuth, tags=["Reports"])
 def report_status(request, task_id: str):
     """Cek status & hasil task report generation."""
     result = AsyncResult(task_id)
+    from django.http import JsonResponse
 
-    response = {"task_id": task_id, "status": result.status}
     if result.ready():
-        response["result"] = result.result
-    else:
-        response["message"] = "Task masih dalam proses..."
-
-    return response
+        return JsonResponse(success({
+            "task_id": task_id,
+            "status": result.status,
+            "result": result.result,
+        }))
+    return JsonResponse(success({
+        "task_id": task_id,
+        "status": result.status,
+        "result": None,
+    }, "Task masih dalam proses"))

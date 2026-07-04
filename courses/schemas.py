@@ -1,6 +1,19 @@
 from ninja import Schema, Field
 from datetime import datetime
 from typing import Optional, List
+from enum import Enum
+
+
+# ── Sorting Enum (Chapter 8) ──────────────────────────────────
+# Nilai positif = ascending, nilai dengan prefix "-" = descending.
+
+class CourseOrdering(str, Enum):
+    name_asc       = "name"
+    name_desc      = "-name"
+    price_asc      = "price"
+    price_desc     = "-price"
+    created_asc    = "created_at"
+    created_desc   = "-created_at"
 
 
 # ── User & Auth Schemas ───────────────────────────────────────
@@ -80,6 +93,7 @@ class PaginatedCourseOut(Schema):
     total: int
     page: int
     page_size: int
+    total_pages: int
     results: List[CourseOut]
 
 
